@@ -25,19 +25,26 @@ def populate_initial_data():
     with app.app_context():
         logger.info("Iniciando população de dados iniciais")
         
-        # Em produção (Render), não recria o banco a cada execução
+        # Em desenvolvimento (local), recria o banco
         if 'RENDER' not in os.environ:
             logger.info("Recriando o banco de dados (apenas localmente)")
             db.drop_all()
             db.create_all()
-        elif Queue.query.count() == 0:  # Só popula se o banco estiver vazio no Render
-            logger.info("Banco vazio detectado no Render, populando dados iniciais")
-            db.create_all()
+        else:
+            # No Render, cria as tabelas apenas se não existirem
+            logger.info("Garantindo que as tabelas existam no Render")
+            db.create_all()  # Não sobrescreve tabelas existentes
         
-        if Queue.query.count() > 0:
-            logger.info("Dados iniciais já existem, pulando população.")
-            return
-        
+        # Verifica se há dados na tabela queue
+        try:
+            if Queue.query.count() > 0:
+                logger.info("Dados iniciais já existem, pulando população.")
+                return
+        except Exception as e:
+            logger.warning(f"Tabela 'queue' ainda não existe ou há um erro: {str(e)}. Prosseguindo com a criação dos dados.")
+
+        # Popula os dados iniciais
+        logger.info("Populando dados iniciais no banco")
         locais = [
             LocalAtendimento(
                 nome="Centro de Saúde Camama",
@@ -155,7 +162,6 @@ app = create_app()
 with app.app_context():
     populate_initial_data()
 
-# Para o Render, exporta apenas o app; localmente, usa socketio.run()
 if __name__ == '__main__':
     if 'RENDER' not in os.environ:
         logger.info("Iniciando a aplicação Facilita 2.0 com SocketIO (localmente)")
