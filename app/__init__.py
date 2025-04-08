@@ -1,12 +1,11 @@
 # app/__init__.py
+import logging
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 import os
 from dotenv import load_dotenv
 
-# Carrega o .env localmente
 load_dotenv()
-
 db = SQLAlchemy()
 
 def create_app():
@@ -20,10 +19,13 @@ def create_app():
     app.config['SQLALCHEMY_DATABASE_URI'] = database_url
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
     
-    # Inicializar extensões
+    # Configuração de logging
+    logging.basicConfig(level=logging.INFO)
+    app.logger.setLevel(logging.INFO)
+    app.logger.info(f"Iniciando com banco de dados: {app.config['SQLALCHEMY_DATABASE_URI']}")
+    
     db.init_app(app)
     
-    # Registrar rotas
     from .routes import init_routes
     from .queue_routes import init_queue_routes
     init_routes(app)
