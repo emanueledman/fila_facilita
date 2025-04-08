@@ -1,4 +1,5 @@
 import logging
+import os
 from app import create_app, db, socketio
 from app.models import LocalAtendimento, Servico, Queue, SlotAgendamento, Ticket, Feedback
 from datetime import datetime, time, timedelta, UTC
@@ -24,9 +25,18 @@ def populate_initial_data():
     with app.app_context():
         logger.info("Iniciando população de dados iniciais")
         
-        logger.info("Recriando o banco de dados")
-        db.drop_all()
-        db.create_all()
+        # Em produção (Render), não recria o banco a cada execução
+        if 'RENDER' not in os.environ:
+            logger.info("Recriando o banco de dados (apenas localmente)")
+            db.drop_all()
+            db.create_all()
+        elif Queue.query.count() == 0:  # Só popula se o banco estiver vazio no Render
+            logger.info("Banco vazio detectado no Render, populando dados iniciais")
+            db.create_all()
+        
+        if Queue.query.count() > 0:
+            logger.info("Dados iniciais já existem, pulando população.")
+            return
         
         locais = [
             LocalAtendimento(
@@ -145,6 +155,10 @@ app = create_app()
 with app.app_context():
     populate_initial_data()
 
+# Para o Render, exporta apenas o app; localmente, usa socketio.run()
 if __name__ == '__main__':
-    logger.info("Iniciando a aplicação Facilita 2.0 com SocketIO")
-    socketio.run(app, host='0.0.0.0', port=5000, debug=True)
+    if 'RENDER' not in os.environ:
+        logger.info("Iniciando a aplicação Facilita 2.0 com SocketIO (localmente)")
+        socketio.run(app, host='0.0.0.0', port=5000, debug=True)
+    else:
+        logger.info("Iniciando a aplicação Facilita 2.0 no Render com gunicorn")
