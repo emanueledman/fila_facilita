@@ -1,3 +1,4 @@
+# app/config.py
 import os
 from datetime import timedelta
 
@@ -6,10 +7,18 @@ class Config:
     TESTING = False
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     
+    # Configuração do banco de dados
     if 'RENDER' in os.environ:
-        SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL', '').replace(
-            'postgres://', 'postgresql://') + '?sslmode=require'
+        # No Render, usa DATABASE_URL diretamente e ajusta para postgresql://
+        database_url = os.environ.get('DATABASE_URL')
+        if not database_url:
+            raise ValueError("DATABASE_URL não está definido no ambiente do Render")
+        SQLALCHEMY_DATABASE_URI = database_url.replace('postgres://', 'postgresql://')
+        # Garante que sslmode=require esteja presente
+        if 'sslmode' not in SQLALCHEMY_DATABASE_URI:
+            SQLALCHEMY_DATABASE_URI += '?sslmode=require'
     else:
+        # Localmente, usa SQLite por padrão, a menos que TRY_POSTGRES esteja ativado
         try_postgres = os.getenv('TRY_POSTGRES', 'False').lower() == 'true'
         if try_postgres:
             database_url = os.environ.get('DATABASE_URL', 'sqlite:///facilita.db')

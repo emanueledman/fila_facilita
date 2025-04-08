@@ -1,3 +1,4 @@
+# app/__init__.py
 import logging
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
@@ -33,8 +34,9 @@ def create_app():
     app.logger.addHandler(log_handler)
     app.logger.setLevel(logging.INFO)
     app.logger.info(f"Iniciando aplicação com banco de dados: {app.config['SQLALCHEMY_DATABASE_URI']}")
-
+    
     try:
+        app.logger.info(f"Tentando criar engine com URL: {app.config['SQLALCHEMY_DATABASE_URI']}")
         engine = sqlalchemy.create_engine(app.config['SQLALCHEMY_DATABASE_URI'])
         with engine.connect() as conn:
             app.logger.info("Conexão com o banco de dados estabelecida com sucesso")
