@@ -4,4 +4,4 @@ from flask import jsonify
 def init_routes(app):
     @app.route('/api/status', methods=['GET'])
     def status():
-        return jsonify({'mensagem': 'API do Facilita 2.0 está funcionando!'})
+        return jsonify({'message': 'API do Facilita 2.0 está funcionando!'})
