@@ -50,8 +50,13 @@ def create_app():
     db.init_app(app)
     
     # Importa os modelos após inicializar o db
-    from .models import LocalAtendimento, Servico, Queue, Ticket, SlotAgendamento, Feedback
+    try:
+        from .models import LocalAtendimento, Servico, Queue, Ticket, SlotAgendamento, Feedback
+    except Exception as e:
+        app.logger.error(f"Erro ao importar modelos: {str(e)}")
+        raise
     
+    # Inicializa o SocketIO
     try:
         socketio.init_app(app)
         app.logger.info("SocketIO inicializado com sucesso")
@@ -104,13 +109,13 @@ def create_app():
         queue_id = data.get('queue_id')
         user_id = data.get('user_id')
         app.logger.info(f"Usuário {user_id} entrou na fila {queue_id} via WebSocket")
-        socketio.emit('queue_update', {'queue_id': queue_id, 'message': f'Usuário {user_id} entrou na fila'})
+        socketio.emit('queue_update', {'queue_id': queue_id, 'message': f'Usuário {user_id} entrou na fila'}, broadcast=True)
 
     @socketio.on('join_slot')
     def handle_join_slot(data):
         slot_id = data.get('slot_id')
         user_id = data.get('user_id')
         app.logger.info(f"Usuário {user_id} reservou o slot {slot_id} via WebSocket")
-        socketio.emit('slot_update', {'slot_id': slot_id, 'message': f'Usuário {user_id} reservou o slot'})
+        socketio.emit('slot_update', {'slot_id': slot_id, 'message': f'Usuário {user_id} reservou o slot'}, broadcast=True)
 
     return app

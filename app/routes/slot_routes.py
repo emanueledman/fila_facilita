@@ -3,8 +3,8 @@ from flask import request, jsonify, current_app
 from ..auth import require_auth, require_gestor
 from ..services.slot_service import SlotService
 from datetime import datetime
+from ..models import Servico, SlotAgendamento
 
-# Configuração de logging
 logger = logging.getLogger(__name__)
 
 def setup_logging():
@@ -22,19 +22,16 @@ def setup_logging():
 setup_logging()
 
 def init_slot_routes(app):
-    """Registra as rotas relacionadas a agendamentos no aplicativo Flask."""
-
     @app.route('/api/servico/<service>/slots', methods=['GET'])
     @require_auth
     def list_slots(service):
-        """Lista todos os slots disponíveis para um serviço."""
         try:
-            servico = SlotService.Servico.query.filter_by(nome=service).first()
+            servico = Servico.query.filter_by(nome=service).first()
             if not servico:
                 logger.warning(f"Serviço não encontrado: {service}")
                 return jsonify({'error': 'Serviço não encontrado'}), 404
             
-            slots = SlotService.SlotAgendamento.query.filter_by(servico_id=servico.id, status="aberto").all()
+            slots = SlotAgendamento.query.filter_by(servico_id=servico.id, status="aberto").all()
             response = [{
                 'id': s.id,
                 'data_horario': s.data_horario.isoformat(),
@@ -52,7 +49,6 @@ def init_slot_routes(app):
     @app.route('/api/servico/<service>/slot', methods=['POST'])
     @require_gestor
     def create_slot(service):
-        """Cria um novo slot de agendamento (apenas gestores)."""
         try:
             data = request.get_json() or {}
             data_horario = datetime.fromisoformat(data.get('data_horario'))
@@ -84,7 +80,6 @@ def init_slot_routes(app):
     @app.route('/api/slot/<slot_id>/reservar', methods=['POST'])
     @require_auth
     def reserve_slot(slot_id):
-        """Reserva um slot para o usuário."""
         try:
             slot = SlotService.reserve_slot(slot_id, request.user_id)
             response = {
@@ -110,7 +105,6 @@ def init_slot_routes(app):
     @app.route('/api/slot/<slot_id>/cancelar', methods=['POST'])
     @require_auth
     def cancel_slot(slot_id):
-        """Cancela a reserva de um slot."""
         try:
             slot = SlotService.cancel_slot_reservation(slot_id, request.user_id)
             response = {
@@ -135,9 +129,8 @@ def init_slot_routes(app):
     @app.route('/api/slot/<slot_id>', methods=['GET'])
     @require_auth
     def slot_status(slot_id):
-        """Retorna o status de um slot específico."""
         try:
-            slot = SlotService.SlotAgendamento.query.get_or_404(slot_id)
+            slot = SlotAgendamento.query.get_or_404(slot_id)
             if slot.user_id != request.user_id and request.user_tipo != 'gestor':
                 logger.warning(f"Tentativa não autorizada de acesso ao slot {slot_id} por {request.user_id}")
                 return jsonify({'error': 'Não autorizado'}), 403
@@ -150,7 +143,7 @@ def init_slot_routes(app):
                 'status': slot.status,
                 'user_id': slot.user_id,
                 'trade_available': slot.trade_available,
-                'created_at': slot.created_at.isoformat()
+                'created_at': slot.created_at.isoformat() if slot.created_at else None
             }
             
             logger.info(f"Status do slot {slot_id} retornado para {request.user_id}")
@@ -162,7 +155,6 @@ def init_slot_routes(app):
     @app.route('/api/slot/trade/offer/<slot_id>', methods=['POST'])
     @require_auth
     def offer_trade_slot(slot_id):
-        """Oferece um slot para troca."""
         try:
             slot = SlotService.offer_trade_slot(slot_id, request.user_id)
             response = {
@@ -183,7 +175,6 @@ def init_slot_routes(app):
     @app.route('/api/slot/trade/<slot_to_id>', methods=['POST'])
     @require_auth
     def trade_slot(slot_to_id):
-        """Realiza a troca de um slot por outro."""
         try:
             data = request.get_json() or {}
             slot_from_id = data.get('slot_from_id')
@@ -212,21 +203,20 @@ def init_slot_routes(app):
     @app.route('/api/servico/<service>/slot/status', methods=['GET'])
     @require_auth
     def service_slot_status(service):
-        """Retorna o status dos slots de um serviço para o usuário."""
         try:
-            servico = SlotService.Servico.query.filter_by(nome=service).first()
+            servico = Servico.query.filter_by(nome=service).first()
             if not servico:
                 logger.warning(f"Serviço não encontrado: {service}")
                 return jsonify({'error': 'Serviço não encontrado'}), 404
             
-            user_slot = SlotService.SlotAgendamento.query.filter_by(
+            user_slot = SlotAgendamento.query.filter_by(
                 servico_id=servico.id, user_id=request.user_id, status='reservado'
             ).first()
             
             response = {
                 'service': service,
-                'total_slots': SlotService.SlotAgendamento.query.filter_by(servico_id=servico.id).count(),
-                'open_slots': SlotService.SlotAgendamento.query.filter_by(servico_id=servico.id, status='aberto').count(),
+                'total_slots': SlotAgendamento.query.filter_by(servico_id=servico.id).count(),
+                'open_slots': SlotAgendamento.query.filter_by(servico_id=servico.id, status='aberto').count(),
                 'user_slot': {
                     'id': user_slot.id,
                     'data_horario': user_slot.data_horario.isoformat(),

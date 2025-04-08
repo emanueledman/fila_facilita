@@ -7,7 +7,6 @@ from sqlalchemy import desc
 from .. import db
 from ..models import SlotAgendamento, Servico
 
-# Configuração de logging
 logger = logging.getLogger(__name__)
 
 def setup_logging():
@@ -25,17 +24,13 @@ def setup_logging():
 setup_logging()
 
 class SlotService:
-    # Constantes
     FCM_API_URL = "https://fcm.googleapis.com/fcm/send"
-    FCM_API_KEY = "sua_chave_fcm"  # Substitua pela chave real no .env
-    NOTIFICATION_THRESHOLD_MINUTES = 15  # Notificação proativa a 15 minutos do slot
+    FCM_API_KEY = os.getenv("FCM_API_KEY", "sua_chave_fcm")  # Carrega do .env
+    NOTIFICATION_THRESHOLD_MINUTES = 15
 
     @staticmethod
     def send_notification(user_id, message, via_websocket=True):
-        """Envia notificação para o usuário via FCM e WebSocket."""
         logger.info(f"Enviando notificação para {user_id}: {message}")
-        
-        # Simulação de envio via FCM (substitua por integração real)
         try:
             import requests
             response = requests.post(
@@ -48,7 +43,6 @@ class SlotService:
         except Exception as e:
             logger.error(f"Erro ao enviar notificação FCM: {str(e)}")
         
-        # Envio via WebSocket
         if via_websocket:
             try:
                 emit('notification', {'user_id': user_id, 'message': message}, namespace='/', broadcast=True)
@@ -58,13 +52,11 @@ class SlotService:
 
     @staticmethod
     def create_slot(service, data_horario, capacidade_maxima, gestor_id=None):
-        """Cria um novo slot de agendamento para um serviço."""
         servico = Servico.query.filter_by(nome=service).first()
         if not servico:
             logger.error(f"Serviço não encontrado: {service}")
             raise ValueError("Serviço não encontrado")
         
-        # Validações
         if data_horario < datetime.utcnow():
             logger.warning(f"Tentativa de criar slot no passado: {data_horario}")
             raise ValueError("Data do slot deve ser no futuro")
@@ -76,7 +68,8 @@ class SlotService:
             servico_id=servico.id,
             data_horario=data_horario,
             capacidade_maxima=capacidade_maxima,
-            user_id=gestor_id if gestor_id else None  # Gestor pode criar sem reservar
+            user_id=gestor_id if gestor_id else None,
+            created_at=datetime.utcnow()
         )
         db.session.add(slot)
         db.session.commit()
@@ -98,7 +91,6 @@ class SlotService:
 
     @staticmethod
     def reserve_slot(slot_id, user_id):
-        """Reserva um slot para um usuário."""
         slot = SlotAgendamento.query.get_or_404(slot_id)
         
         if slot.status != "aberto":
@@ -132,7 +124,6 @@ class SlotService:
 
     @staticmethod
     def cancel_slot_reservation(slot_id, user_id):
-        """Cancela uma reserva de slot."""
         slot = SlotAgendamento.query.get_or_404(slot_id)
         
         if slot.user_id != user_id or slot.status != "reservado":
@@ -160,7 +151,6 @@ class SlotService:
 
     @staticmethod
     def check_proactive_notifications():
-        """Verifica e envia notificações proativas para slots próximos."""
         now = datetime.utcnow()
         reserved_slots = SlotAgendamento.query.filter_by(status='reservado').all()
         
@@ -178,7 +168,6 @@ class SlotService:
 
     @staticmethod
     def offer_trade_slot(slot_id, user_id):
-        """Oferece um slot para troca."""
         slot = SlotAgendamento.query.get_or_404(slot_id)
         
         if slot.user_id != user_id or slot.status != "reservado":
@@ -201,7 +190,6 @@ class SlotService:
 
     @staticmethod
     def trade_slots(slot_from_id, slot_to_id, user_from_id):
-        """Realiza a troca entre dois slots."""
         slot_from = SlotAgendamento.query.get_or_404(slot_from_id)
         slot_to = SlotAgendamento.query.get_or_404(slot_to_id)
         
@@ -231,7 +219,6 @@ class SlotService:
 
     @staticmethod
     def get_slot_availability(slot_id):
-        """Retorna a disponibilidade atual de um slot."""
         slot = SlotAgendamento.query.get_or_404(slot_id)
         availability = {
             'slot_id': slot.id,
