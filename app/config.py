@@ -2,39 +2,39 @@ import os
 from datetime import timedelta
 
 class Config:
-    # Configuração base
     DEBUG = False
     TESTING = False
-    
-    # Configuração do banco de dados
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     
-    # Se estiver no Render.com, use o DATABASE_URL fornecido
     if 'RENDER' in os.environ:
         SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL', '').replace(
-            'postgres://', 'postgresql://')
+            'postgres://', 'postgresql://') + '?sslmode=require'
     else:
-        SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL', 'sqlite:///queue.db')
+        try_postgres = os.getenv('TRY_POSTGRES', 'False').lower() == 'true'
+        if try_postgres:
+            database_url = os.environ.get('DATABASE_URL', 'sqlite:///facilita.db')
+            if database_url.startswith('postgres://'):
+                database_url = database_url.replace('postgres://', 'postgresql://')
+            if 'postgresql://' in database_url and 'sslmode' not in database_url:
+                database_url += '?sslmode=require'
+            SQLALCHEMY_DATABASE_URI = database_url
+        else:
+            SQLALCHEMY_DATABASE_URI = 'sqlite:///facilita.db'
     
-    # Configuração JWT
     JWT_SECRET_KEY = os.environ.get('JWT_SECRET_KEY', '00974655')
-    JWT_ACCESS_TOKEN_EXPIRES = timedelta(hours=1)  # Token válido por 1 hora
-    
-    # Configuração CORS
+    JWT_ACCESS_TOKEN_EXPIRES = timedelta(hours=1)
     CORS_HEADERS = 'Content-Type'
 
 class DevelopmentConfig(Config):
     DEBUG = True
 
 class ProductionConfig(Config):
-    # Configurações específicas para produção
     pass
 
 class TestingConfig(Config):
     TESTING = True
     SQLALCHEMY_DATABASE_URI = 'sqlite:///:memory:'
 
-# Configuração baseada no ambiente
 config_by_name = {
     'dev': DevelopmentConfig,
     'prod': ProductionConfig,
