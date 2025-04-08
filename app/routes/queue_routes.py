@@ -3,6 +3,7 @@ from flask import request, jsonify, current_app
 from ..auth import require_auth, require_gestor
 from ..services.queue_service import QueueService
 from datetime import datetime, time
+from .. import db
 
 # Configuração de logging
 logger = logging.getLogger(__name__)
@@ -28,7 +29,9 @@ def init_queue_routes(app):
     def list_queues():
         """Lista todas as filas disponíveis."""
         try:
-            queues = QueueService.db.session.query(QueueService.Queue).all()
+            # Usamos Queue diretamente do modelo, já que db está disponível
+            from ..models import Queue
+            queues = db.session.query(Queue).all()
             now = datetime.now().time()
             response = [{
                 'id': q.id,

@@ -1,4 +1,3 @@
-# app/__init__.py
 import logging
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
@@ -11,6 +10,7 @@ import sqlalchemy
 
 load_dotenv()
 
+# Instância global de SQLAlchemy e SocketIO
 db = SQLAlchemy()
 socketio = SocketIO(cors_allowed_origins="*", async_mode='threading', engineio_logger=True)
 
@@ -21,6 +21,7 @@ def create_app():
     config = get_config()
     app.config.from_object(config)
     
+    # Configuração de logging
     log_formatter = logging.Formatter(
         '%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]'
     )
@@ -35,6 +36,7 @@ def create_app():
     app.logger.setLevel(logging.INFO)
     app.logger.info(f"Iniciando aplicação com banco de dados: {app.config['SQLALCHEMY_DATABASE_URI']}")
     
+    # Teste de conexão com o banco de dados
     try:
         app.logger.info(f"Tentando criar engine com URL: {app.config['SQLALCHEMY_DATABASE_URI']}")
         engine = sqlalchemy.create_engine(app.config['SQLALCHEMY_DATABASE_URI'])
@@ -44,7 +46,12 @@ def create_app():
         app.logger.error(f"Falha ao conectar ao banco de dados: {str(e)}")
         raise
 
+    # Inicializa o db com o app
     db.init_app(app)
+    
+    # Importa os modelos após inicializar o db
+    from .models import LocalAtendimento, Servico, Queue, Ticket, SlotAgendamento, Feedback
+    
     try:
         socketio.init_app(app)
         app.logger.info("SocketIO inicializado com sucesso")
@@ -52,6 +59,7 @@ def create_app():
         app.logger.error(f"Erro ao inicializar SocketIO: {str(e)}")
         raise
 
+    # Importa e registra as rotas após modelos e db estarem prontos
     try:
         from .routes.queue_routes import init_queue_routes
         from .routes.slot_routes import init_slot_routes
@@ -65,6 +73,7 @@ def create_app():
         app.logger.error(f"Erro ao inicializar rotas: {str(e)}")
         raise
 
+    # Tarefa em background para notificações proativas
     def run_background_tasks():
         while True:
             try:
@@ -80,6 +89,7 @@ def create_app():
 
     threading.Thread(target=run_background_tasks, daemon=True).start()
 
+    # Eventos do SocketIO
     @socketio.on('connect')
     def handle_connect():
         app.logger.info("Cliente WebSocket conectado")

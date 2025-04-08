@@ -1,9 +1,9 @@
 import logging
-import os
 from app import create_app, db, socketio
 from app.models import LocalAtendimento, Servico, Queue, SlotAgendamento, Ticket, Feedback
 from datetime import datetime, time, timedelta, UTC
 import uuid
+import os
 
 logger = logging.getLogger(__name__)
 
