@@ -3,7 +3,8 @@ Flask-SQLAlchemy==3.1.1
 Flask-SocketIO==5.3.6
 python-dotenv==1.0.1
 SQLAlchemy==2.0.30
-psycopg2-binary==2.9.9
+psycopg2-binary==2.9.9  # Driver para PostgreSQL
 gunicorn==22.0.0
 PyJWT==2.8.0
-eventlet==0.36.1
+requests==2.32.3  # Necessário para slot_service.py
+eventlet==0.36.1  # Worker assíncrono para WebSocket com Gunicorn
