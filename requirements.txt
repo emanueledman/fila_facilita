@@ -5,3 +5,4 @@ python-dotenv==1.0.1
 Flask-SQLAlchemy==3.0.5
 PyJWT==2.8.0
 psycopg2-binary==2.9.9
+requests==2.32.3

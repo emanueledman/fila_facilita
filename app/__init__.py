@@ -13,7 +13,10 @@ def create_app():
     
     # Configurações
     app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', '00974655')
-    database_url = os.getenv('DATABASE_URL', 'sqlite:///facilita.db')
+    database_url = os.getenv('DATABASE_URL')
+    if not database_url:
+        app.logger.error("DATABASE_URL não encontrado nas variáveis de ambiente!")
+        database_url = 'sqlite:///facilita.db'  # Fallback apenas para desenvolvimento local
     if database_url.startswith('postgres://'):
         database_url = database_url.replace('postgres://', 'postgresql://')
     app.config['SQLALCHEMY_DATABASE_URI'] = database_url
