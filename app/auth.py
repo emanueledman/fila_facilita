@@ -15,7 +15,7 @@ def require_auth(f):
             # Remove "Bearer " do token
             token = token.replace('Bearer ', '')
             # Decodifica o token (assumindo que o Facilita 2.0 usa JWT)
-            payload = jwt.decode(token, os.getenv('JWT_SECRET', 'sua-chave-jwt'), algorithms=['HS256'])
+            payload = jwt.decode(token, os.getenv('JWT_SECRET', '974655'), algorithms=['HS256'])
             request.user_id = payload['user_id']  # Extrai o user_id do token
         except jwt.InvalidTokenError:
             return jsonify({'error': 'Token inválido'}), 401
