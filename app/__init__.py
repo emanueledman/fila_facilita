@@ -2,6 +2,10 @@
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 import os
+from dotenv import load_dotenv
+
+# Carrega o .env localmente
+load_dotenv()
 
 db = SQLAlchemy()
 
@@ -10,19 +14,14 @@ def create_app():
     
     # Configurações
     app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', '00974655')
-    # Atualização para usar PostgreSQL do Render em produção, com fallback para SQLite local
-    app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv(
-        'DATABASE_URL', 
-        'sqlite:///facilita.db'
-    ).replace('postgres://', 'postgresql://')  # Render usa 'postgres://', SQLAlchemy espera 'postgresql://'
+    database_url = os.getenv('DATABASE_URL', 'sqlite:///facilita.db')
+    if database_url.startswith('postgres://'):
+        database_url = database_url.replace('postgres://', 'postgresql://')
+    app.config['SQLALCHEMY_DATABASE_URI'] = database_url
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
     
     # Inicializar extensões
     db.init_app(app)
-    
-    # Criar tabelas no banco
-    with app.app_context():
-        db.create_all()
     
     # Registrar rotas
     from .routes import init_routes
