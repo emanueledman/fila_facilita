@@ -1,3 +1,5 @@
+import eventlet
+eventlet.monkey_patch()  # Adicionado para corrigir o erro com eventlet no Gunicorn
 import logging
 from app import create_app, db, socketio
 from app.models import LocalAtendimento, Servico, Queue, SlotAgendamento, Ticket, Feedback
