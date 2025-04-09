@@ -2,10 +2,10 @@ import uuid
 from datetime import datetime, timedelta
 import logging
 from flask import current_app
-from flask_socketio import emit
+from flask_socketio import emit, join_room
 from sqlalchemy import desc
-from sqlalchemy.exc import SQLAlchemyError  # Adicionado para capturar erros de banco
-from .. import db
+from sqlalchemy.exc import SQLAlchemyError
+from .. import db, socketio  # Adicionado socketio para eventos personalizados
 from ..models import Queue, Ticket
 
 # Configuração de logging
@@ -62,46 +62,55 @@ class QueueService:
     @staticmethod
     def update_wait_time(queue_id):
         """Atualiza o tempo médio de espera da fila com base em tickets atendidos."""
-        queue = Queue.query.get_or_404(queue_id)
-        attended_tickets = Ticket.query.filter_by(queue_id=queue_id, status='attended').all()
-        
-        if attended_tickets:
-            total_time = sum(
-                (t.attended_at - t.issued_at).total_seconds() / 60
-                for t in attended_tickets if t.attended_at
-            )
-            new_avg = max(5, int(total_time / len(attended_tickets)))  # Mínimo de 5 minutos
-            queue.avg_wait_time = new_avg
-            db.session.commit()
-            logger.info(f"Tempo médio de espera atualizado para fila {queue_id}: {new_avg} minutos")
-        return queue.avg_wait_time
+        try:
+            queue = Queue.query.get_or_404(queue_id)
+            attended_tickets = Ticket.query.filter_by(queue_id=queue_id, status='attended').all()
+            
+            if attended_tickets:
+                total_time = sum(
+                    (t.attended_at - t.issued_at).total_seconds() / 60
+                    for t in attended_tickets if t.attended_at
+                )
+                new_avg = max(5, int(total_time / len(attended_tickets)))  # Mínimo de 5 minutos
+                queue.avg_wait_time = new_avg
+                db.session.commit()
+                logger.info(f"Tempo médio de espera atualizado para fila {queue_id}: {new_avg} minutos")
+            return queue.avg_wait_time
+        except SQLAlchemyError as e:
+            logger.error(f"Erro no banco ao atualizar wait_time para fila {queue_id}: {str(e)}")
+            db.session.rollback()
+            raise
 
     @staticmethod
     def calculate_wait_time(queue_id, ticket_number, priority):
         """Calcula o tempo estimado de espera para um ticket."""
-        queue = Queue.query.get_or_404(queue_id)
-        QueueService.update_wait_time(queue_id)
-        
-        position = max(0, ticket_number - queue.current_ticket)
-        wait_time = position * queue.avg_wait_time
-        
-        # Ajuste por prioridade
-        if priority > 0:
-            wait_time = max(0, wait_time - (priority * 5))  # 5 minutos por nível
-        
-        # Ajuste por volume de tickets ativos
-        if queue.active_tickets > 10:
-            wait_time += int(queue.active_tickets * 0.5)
-        
-        logger.debug(f"Tempo de espera calculado para ticket {ticket_number} na fila {queue_id}: {wait_time} minutos")
-        return wait_time
+        try:
+            queue = Queue.query.get_or_404(queue_id)
+            QueueService.update_wait_time(queue_id)
+            
+            position = max(0, ticket_number - queue.current_ticket)
+            wait_time = position * queue.avg_wait_time
+            
+            # Ajuste por prioridade
+            if priority > 0:
+                wait_time = max(0, wait_time - (priority * 5))  # 5 minutos por nível
+            
+            # Ajuste por volume de tickets ativos
+            if queue.active_tickets > 10:
+                wait_time += int(queue.active_tickets * 0.5)
+            
+            logger.debug(f"Tempo de espera calculado para ticket {ticket_number} na fila {queue_id}: {wait_time} minutos")
+            return wait_time
+        except Exception as e:
+            logger.error(f"Erro ao calcular wait_time para ticket {ticket_number}: {str(e)}")
+            raise
 
     @staticmethod
     def send_notification(user_id, message, via_websocket=True):
         """Envia notificação para o usuário via FCM e WebSocket."""
         logger.info(f"Enviando notificação para {user_id}: {message}")
         
-        # Simulação de envio via FCM (substitua por integração real)
+        # Envio via FCM
         try:
             import requests
             response = requests.post(
@@ -112,7 +121,7 @@ class QueueService:
             if response.status_code != 200:
                 logger.error(f"Falha ao enviar notificação FCM: {response.text}")
         except Exception as e:
-            logger.error(f"Erro ao enviar notificação FCM: {str(e)}")
+            logger.error(f"Erro ao enviar notificação FCM para {user_id}: {str(e)}")
         
         # Envio via WebSocket
         if via_websocket:
@@ -120,7 +129,22 @@ class QueueService:
                 emit('notification', {'user_id': user_id, 'message': message}, namespace='/', broadcast=True)
                 logger.debug(f"Notificação enviada via WebSocket para {user_id}")
             except Exception as e:
-                logger.error(f"Erro ao enviar notificação via WebSocket: {str(e)}")
+                logger.error(f"Erro ao enviar notificação via WebSocket para {user_id}: {str(e)}")
+
+    @staticmethod
+    def _get_queue_tickets(queue_id):
+        """Retorna a lista de tickets pendentes para uma fila."""
+        tickets = Ticket.query.filter_by(queue_id=queue_id, status='pending').all()
+        return [{
+            'ticket_number': t.ticket_number,
+            'user_id': t.user_id,
+            'wait_time': QueueService.calculate_wait_time(queue_id, t.ticket_number, t.priority),
+            'status': t.status,
+            'priority': t.priority,
+            'is_physical': t.is_physical,
+            'qr_code': t.qr_code,
+            'expires_at': t.expires_at.isoformat() if t.expires_at else None
+        } for t in tickets]
 
     @staticmethod
     def add_to_queue(service, user_id, priority=0, is_physical=False):
@@ -161,141 +185,202 @@ class QueueService:
             message = f"Senha #{ticket_number} emitida. QR: {qr_code}. Espera: {wait_time} min"
             QueueService.send_notification(user_id, message)
             
+            # Envia atualização com a lista completa de tickets
+            tickets_data = QueueService._get_queue_tickets(queue.id)
             emit('queue_update', {
                 'queue_id': queue.id,
                 'active_tickets': queue.active_tickets,
+                'current_ticket': queue.current_ticket,
+                'tickets': tickets_data,
                 'message': f"Nova senha emitida: #{ticket_number}"
-            }, namespace='/', broadcast=True)
+            }, namespace='/', room=str(queue.id))
             
             logger.info(f"Ticket {ticket.id} adicionado à fila {service} para {user_id}")
             return ticket
         
         except SQLAlchemyError as e:
             logger.error(f"Erro no banco de dados ao adicionar ticket: {str(e)}", exc_info=True)
-            db.session.rollback()  # Desfaz alterações em caso de erro
-            raise  # Propaga o erro para a rota tratar
-        
+            db.session.rollback()
+            raise
         except Exception as e:
             logger.error(f"Erro interno ao adicionar ticket (não relacionado ao banco): {str(e)}", exc_info=True)
-            db.session.rollback()  # Desfaz alterações em caso de erro
-            raise  # Propaga o erro para a rota tratar
+            db.session.rollback()
+            raise
 
     @staticmethod
     def call_next(service):
         """Chama o próximo ticket da fila, considerando prioridades."""
-        queue = Queue.query.filter_by(service=service).first()
-        if not queue:
-            logger.error(f"Fila não encontrada para serviço: {service}")
-            raise ValueError("Fila não encontrada")
-        if queue.active_tickets == 0:
-            logger.warning(f"Fila {service} está vazia")
-            raise ValueError("Fila vazia")
-        
-        next_ticket = Ticket.query.filter_by(queue_id=queue.id, status='pending')\
-            .order_by(desc(Ticket.priority), Ticket.ticket_number).first()
-        if not next_ticket:
-            logger.warning(f"Nenhum ticket pendente na fila {service}")
-            raise ValueError("Nenhum ticket pendente")
-        
-        now = datetime.utcnow()
-        if next_ticket.expires_at and next_ticket.expires_at < now:
-            next_ticket.status = 'cancelled'
+        try:
+            queue = Queue.query.filter_by(service=service).first()
+            if not queue:
+                logger.error(f"Fila não encontrada para serviço: {service}")
+                raise ValueError("Fila não encontrada")
+            if queue.active_tickets == 0:
+                logger.warning(f"Fila {service} está vazia")
+                raise ValueError("Fila vazia")
+            
+            next_ticket = Ticket.query.filter_by(queue_id=queue.id, status='pending')\
+                .order_by(desc(Ticket.priority), Ticket.ticket_number).first()
+            if not next_ticket:
+                logger.warning(f"Nenhum ticket pendente na fila {service}")
+                raise ValueError("Nenhum ticket pendente")
+            
+            now = datetime.utcnow()
+            if next_ticket.expires_at and next_ticket.expires_at < now:
+                next_ticket.status = 'cancelled'
+                queue.active_tickets -= 1
+                db.session.commit()
+                logger.info(f"Ticket {next_ticket.id} expirou e foi cancelado")
+                return QueueService.call_next(service)
+            
+            queue.current_ticket = next_ticket.ticket_number
             queue.active_tickets -= 1
+            next_ticket.status = 'called'
+            next_ticket.attended_at = now
             db.session.commit()
-            logger.info(f"Ticket {next_ticket.id} expirou e foi cancelado")
-            return QueueService.call_next(service)  # Chama o próximo recursivamente
+            
+            message = f"Sua senha #{next_ticket.ticket_number} foi chamada!"
+            QueueService.send_notification(next_ticket.user_id, message)
+            
+            # Envia atualização com a lista completa de tickets
+            tickets_data = QueueService._get_queue_tickets(queue.id)
+            emit('queue_update', {
+                'queue_id': queue.id,
+                'current_ticket': queue.current_ticket,
+                'active_tickets': queue.active_tickets,
+                'tickets': tickets_data,
+                'message': f"Senha #{next_ticket.ticket_number} chamada"
+            }, namespace='/', room=str(queue.id))
+            
+            logger.info(f"Ticket {next_ticket.id} chamado na fila {service}")
+            return next_ticket
         
-        queue.current_ticket = next_ticket.ticket_number
-        queue.active_tickets -= 1
-        next_ticket.status = 'called'
-        next_ticket.attended_at = now
-        db.session.commit()
-        
-        message = f"Sua senha #{next_ticket.ticket_number} foi chamada!"
-        QueueService.send_notification(next_ticket.user_id, message)
-        
-        emit('queue_update', {
-            'queue_id': queue.id,
-            'current_ticket': queue.current_ticket,
-            'active_tickets': queue.active_tickets,
-            'message': f"Senha #{next_ticket.ticket_number} chamada"
-        }, namespace='/', broadcast=True)
-        
-        logger.info(f"Ticket {next_ticket.id} chamado na fila {service}")
-        return next_ticket
+        except SQLAlchemyError as e:
+            logger.error(f"Erro no banco de dados ao chamar ticket: {str(e)}", exc_info=True)
+            db.session.rollback()
+            raise
+        except Exception as e:
+            logger.error(f"Erro interno ao chamar ticket: {str(e)}", exc_info=True)
+            db.session.rollback()
+            raise
 
     @staticmethod
     def check_proactive_notifications():
         """Verifica e envia notificações proativas para tickets próximos de serem chamados."""
-        now = datetime.utcnow()
-        pending_tickets = Ticket.query.filter_by(status='pending').all()
-        
-        for ticket in pending_tickets:
-            if ticket.expires_at and ticket.expires_at < now:
-                ticket.status = 'cancelled'
-                ticket.queue.active_tickets -= 1
-                db.session.commit()
-                QueueService.send_notification(ticket.user_id, f"Sua senha #{ticket.ticket_number} expirou!")
-                logger.info(f"Ticket {ticket.id} expirou e foi cancelado")
-                continue
+        try:
+            now = datetime.utcnow()
+            pending_tickets = Ticket.query.filter_by(status='pending').all()
             
-            wait_time = QueueService.calculate_wait_time(ticket.queue_id, ticket.ticket_number, ticket.priority)
-            if wait_time <= 5:
-                message = f"Faltam {wait_time} minutos para sua vez na fila {ticket.queue.service}!"
-                QueueService.send_notification(ticket.user_id, message)
-                logger.debug(f"Notificação proativa enviada para ticket {ticket.id}")
+            for ticket in pending_tickets:
+                if ticket.expires_at and ticket.expires_at < now:
+                    ticket.status = 'cancelled'
+                    ticket.queue.active_tickets -= 1
+                    db.session.commit()
+                    QueueService.send_notification(ticket.user_id, f"Sua senha #{ticket.ticket_number} expirou!")
+                    logger.info(f"Ticket {ticket.id} expirou e foi cancelado")
+                    # Atualiza a fila após cancelamento
+                    tickets_data = QueueService._get_queue_tickets(ticket.queue_id)
+                    emit('queue_update', {
+                        'queue_id': ticket.queue_id,
+                        'active_tickets': ticket.queue.active_tickets,
+                        'tickets': tickets_data,
+                        'message': f"Ticket #{ticket.ticket_number} expirou"
+                    }, namespace='/', room=str(ticket.queue_id))
+                    continue
+                
+                wait_time = QueueService.calculate_wait_time(ticket.queue_id, ticket.ticket_number, ticket.priority)
+                if wait_time <= 5:
+                    message = f"Faltam {wait_time} minutos para sua vez na fila {ticket.queue.service}!"
+                    QueueService.send_notification(ticket.user_id, message)
+                    logger.debug(f"Notificação proativa enviada para ticket {ticket.id}")
+        except SQLAlchemyError as e:
+            logger.error(f"Erro no banco ao verificar notificações: {str(e)}", exc_info=True)
+            db.session.rollback()
+            raise
 
     @staticmethod
     def offer_trade_ticket(ticket_id, user_id):
         """Oferece um ticket para troca."""
-        ticket = Ticket.query.get_or_404(ticket_id)
-        if ticket.user_id != user_id or ticket.status != 'pending':
-            logger.warning(f"Tentativa inválida de oferecer ticket {ticket_id} por {user_id}")
-            raise ValueError("Você não pode oferecer este ticket para troca")
-        
-        ticket.trade_available = True
-        db.session.commit()
-        
-        message = f"Sua senha #{ticket.ticket_number} está disponível para troca."
-        QueueService.send_notification(user_id, message)
-        
-        emit('trade_update', {
-            'ticket_id': ticket.id,
-            'message': f"Ticket #{ticket.ticket_number} disponível para troca"
-        }, namespace='/', broadcast=True)
-        
-        logger.info(f"Ticket {ticket.id} oferecido para troca por {user_id}")
-        return ticket
+        try:
+            ticket = Ticket.query.get_or_404(ticket_id)
+            if ticket.user_id != user_id or ticket.status != 'pending':
+                logger.warning(f"Tentativa inválida de oferecer ticket {ticket_id} por {user_id}")
+                raise ValueError("Você não pode oferecer este ticket para troca")
+            
+            ticket.trade_available = True
+            db.session.commit()
+            
+            message = f"Sua senha #{ticket.ticket_number} está disponível para troca."
+            QueueService.send_notification(user_id, message)
+            
+            emit('trade_update', {
+                'ticket_id': ticket.id,
+                'message': f"Ticket #{ticket.ticket_number} disponível para troca"
+            }, namespace='/', broadcast=True)
+            
+            logger.info(f"Ticket {ticket.id} oferecido para troca por {user_id}")
+            return ticket
+        except SQLAlchemyError as e:
+            logger.error(f"Erro no banco ao oferecer ticket para troca: {str(e)}", exc_info=True)
+            db.session.rollback()
+            raise
 
     @staticmethod
     def trade_tickets(ticket_from_id, ticket_to_id, user_from_id):
         """Realiza a troca entre dois tickets."""
-        ticket_from = Ticket.query.get_or_404(ticket_from_id)
-        ticket_to = Ticket.query.get_or_404(ticket_to_id)
-        
-        if ticket_from.user_id != user_from_id or not ticket_to.trade_available or \
-           ticket_from.queue_id != ticket_to.queue_id or ticket_from.status != 'pending' or \
-           ticket_to.status != 'pending':
-            logger.warning(f"Tentativa inválida de troca entre {ticket_from_id} e {ticket_to_id}")
-            raise ValueError("Troca inválida")
-        
-        user_from, user_to = ticket_from.user_id, ticket_to.user_id
-        num_from, num_to = ticket_from.ticket_number, ticket_to.ticket_number
-        
-        ticket_from.user_id, ticket_from.ticket_number = user_to, num_to
-        ticket_to.user_id, ticket_to.ticket_number = user_from, num_from
-        ticket_from.trade_available, ticket_to.trade_available = False, False
-        
-        db.session.commit()
-        
-        QueueService.send_notification(user_from, f"Troca realizada! Nova senha: #{ticket_to.ticket_number}")
-        QueueService.send_notification(user_to, f"Troca realizada! Nova senha: #{ticket_from.ticket_number}")
-        
-        emit('trade_update', {
-            'ticket_from_id': ticket_from.id,
-            'ticket_to_id': ticket_to.id,
-            'message': f"Troca realizada entre #{ticket_from.ticket_number} e #{ticket_to.ticket_number}"
-        }, namespace='/', broadcast=True)
-        
-        logger.info(f"Troca realizada entre tickets {ticket_from_id} e {ticket_to_id}")
-        return {"ticket_from": ticket_from, "ticket_to": ticket_to}
+        try:
+            ticket_from = Ticket.query.get_or_404(ticket_from_id)
+            ticket_to = Ticket.query.get_or_404(ticket_to_id)
+            
+            if ticket_from.user_id != user_from_id or not ticket_to.trade_available or \
+               ticket_from.queue_id != ticket_to.queue_id or ticket_from.status != 'pending' or \
+               ticket_to.status != 'pending':
+                logger.warning(f"Tentativa inválida de troca entre {ticket_from_id} e {ticket_to_id}")
+                raise ValueError("Troca inválida")
+            
+            user_from, user_to = ticket_from.user_id, ticket_to.user_id
+            num_from, num_to = ticket_from.ticket_number, ticket_to.ticket_number
+            
+            ticket_from.user_id, ticket_from.ticket_number = user_to, num_to
+            ticket_to.user_id, ticket_to.ticket_number = user_from, num_from
+            ticket_from.trade_available, ticket_to.trade_available = False, False
+            
+            db.session.commit()
+            
+            QueueService.send_notification(user_from, f"Troca realizada! Nova senha: #{ticket_to.ticket_number}")
+            QueueService.send_notification(user_to, f"Troca realizada! Nova senha: #{ticket_from.ticket_number}")
+            
+            # Atualiza a fila após a troca
+            tickets_data = QueueService._get_queue_tickets(ticket_from.queue_id)
+            emit('trade_update', {
+                'ticket_from_id': ticket_from.id,
+                'ticket_to_id': ticket_to.id,
+                'tickets': tickets_data,
+                'message': f"Troca realizada entre #{ticket_from.ticket_number} e #{ticket_to.ticket_number}"
+            }, namespace='/', room=str(ticket_from.queue_id))
+            
+            logger.info(f"Troca realizada entre tickets {ticket_from_id} e {ticket_to_id}")
+            return {"ticket_from": ticket_from, "ticket_to": ticket_to}
+        except SQLAlchemyError as e:
+            logger.error(f"Erro no banco ao realizar troca: {str(e)}", exc_info=True)
+            db.session.rollback()
+            raise
+
+# Evento WebSocket para inscrição em uma fila
+@socketio.on('join_queue', namespace='/')
+def handle_join_queue(data):
+    queue_id = data.get('queue_id')
+    if queue_id:
+        join_room(str(queue_id))
+        logger.info(f"Cliente juntou-se à sala da fila {queue_id}")
+        # Envia estado inicial da fila
+        tickets_data = QueueService._get_queue_tickets(queue_id)
+        queue = Queue.query.get(queue_id)
+        if queue:
+            emit('queue_update', {
+                'queue_id': queue.id,
+                'active_tickets': queue.active_tickets,
+                'current_ticket': queue.current_ticket,
+                'tickets': tickets_data,
+                'message': f"Cliente conectado à fila {queue_id}"
+            }, room=str(queue_id))

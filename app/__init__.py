@@ -12,7 +12,7 @@ load_dotenv()
 
 # Instância global de SQLAlchemy e SocketIO
 db = SQLAlchemy()
-socketio = SocketIO(cors_allowed_origins="*", async_mode='threading', engineio_logger=True)
+socketio = SocketIO(cors_allowed_origins="*", async_mode='eventlet', engineio_logger=True)
 
 def create_app():
     app = Flask(__name__)
@@ -64,7 +64,7 @@ def create_app():
         app.logger.error(f"Erro ao inicializar SocketIO: {str(e)}")
         raise
 
-    # Importa e registra as rotas após modelos e db estarem prontos
+    # Importa e registra as rotas
     try:
         from .routes.queue_routes import init_queue_routes
         from .routes.slot_routes import init_slot_routes
@@ -108,14 +108,28 @@ def create_app():
     def handle_join_queue(data):
         queue_id = data.get('queue_id')
         user_id = data.get('user_id')
-        app.logger.info(f"Usuário {user_id} entrou na fila {queue_id} via WebSocket")
-        socketio.emit('queue_update', {'queue_id': queue_id, 'message': f'Usuário {user_id} entrou na fila'}, broadcast=True)
+        if queue_id:
+            app.logger.info(f"Usuário {user_id} entrou na fila {queue_id} via WebSocket")
+            # Usa QueueService para enviar estado inicial
+            tickets_data = QueueService._get_queue_tickets(queue_id)
+            queue = Queue.query.get(queue_id)
+            if queue:
+                socketio.emit('queue_update', {
+                    'queue_id': queue.id,
+                    'active_tickets': queue.active_tickets,
+                    'current_ticket': queue.current_ticket,
+                    'tickets': tickets_data,
+                    'message': f"Usuário {user_id} entrou na fila {queue_id}"
+                }, room=str(queue_id))
 
     @socketio.on('join_slot')
     def handle_join_slot(data):
         slot_id = data.get('slot_id')
         user_id = data.get('user_id')
         app.logger.info(f"Usuário {user_id} reservou o slot {slot_id} via WebSocket")
-        socketio.emit('slot_update', {'slot_id': slot_id, 'message': f'Usuário {user_id} reservou o slot'}, broadcast=True)
+        socketio.emit('slot_update', {
+            'slot_id': slot_id,
+            'message': f"Usuário {user_id} reservou o slot"
+        }, broadcast=True)
 
     return app

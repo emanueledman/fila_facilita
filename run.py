@@ -1,8 +1,9 @@
 import eventlet
-eventlet.monkey_patch()  # Adicionado para corrigir o erro com eventlet no Gunicorn
+eventlet.monkey_patch()  # Corrige problemas com eventlet no Gunicorn
 import logging
 from app import create_app, db, socketio
 from app.models import LocalAtendimento, Servico, Queue, SlotAgendamento, Ticket, Feedback
+from app.services.queue_service import QueueService
 from datetime import datetime, time, timedelta, UTC
 import uuid
 import os
@@ -27,7 +28,7 @@ def populate_initial_data():
     with app.app_context():
         logger.info("Iniciando população de dados iniciais")
         
-        # Em desenvolvimento (local), recria o banco
+        # Em desenvolvimento (local), recria o banco; no Render, apenas cria tabelas se necessário
         if 'RENDER' not in os.environ:
             logger.info("Recriando o banco de dados (apenas localmente)")
             db.drop_all()
@@ -62,7 +63,7 @@ def populate_initial_data():
         db.session.add_all(locais)
         db.session.commit()
         
-        # Serviços variados (alguns com slots, outros com filas)
+        # Serviços variados
         servicos = [
             Servico(nome="Vacinação Infantil", descricao="Vacinação para crianças", duracao_media=15, local_id=locais[0].id),
             Servico(nome="Emissão de BI", descricao="Emissão de bilhete de identidade", duracao_media=20, local_id=locais[1].id),
@@ -80,7 +81,7 @@ def populate_initial_data():
         db.session.add_all(servicos)
         db.session.commit()
         
-        # Filas para serviços (alguns sem slots)
+        # Filas para serviços
         queues = [
             Queue(service="Vacinação Infantil", servico_id=servicos[0].id, sector="Saúde", department="Centro de Saúde Camama", institution="Ministério da Saúde", open_time=time(8, 0), daily_limit=50, avg_wait_time=15, active_tickets=0, current_ticket=0),
             Queue(service="Emissão de BI", servico_id=servicos[1].id, sector="Documentação", department="Posto de Identificação Luanda", institution="Ministério da Justiça", open_time=time(9, 0), daily_limit=30, avg_wait_time=20, active_tickets=0, current_ticket=0),
@@ -94,30 +95,25 @@ def populate_initial_data():
         db.session.add_all(queues)
         db.session.commit()
         
-        # Slots de agendamento para alguns serviços
+        # Slots de agendamento
         slots = [
-            SlotAgendamento(servico_id=servicos[7].id, data_horario=datetime.now(UTC) + timedelta(days=1, hours=9), capacidade_maxima=10, capacidade_atual=0, status="aberto"),  # Matrícula Universitária
+            SlotAgendamento(servico_id=servicos[7].id, data_horario=datetime.now(UTC) + timedelta(days=1, hours=9), capacidade_maxima=10, capacidade_atual=0, status="aberto"),
             SlotAgendamento(servico_id=servicos[7].id, data_horario=datetime.now(UTC) + timedelta(days=1, hours=14), capacidade_maxima=10, capacidade_atual=0, status="aberto"),
-            SlotAgendamento(servico_id=servicos[8].id, data_horario=datetime.now(UTC) + timedelta(days=2, hours=10), capacidade_maxima=5, capacidade_atual=0, status="aberto"),   # Audiência Judicial
-            SlotAgendamento(servico_id=servicos[9].id, data_horario=datetime.now(UTC) + timedelta(days=1, hours=11), capacidade_maxima=8, capacidade_atual=0, status="aberto"),   # Emissão de Passaporte
+            SlotAgendamento(servico_id=servicos[8].id, data_horario=datetime.now(UTC) + timedelta(days=2, hours=10), capacidade_maxima=5, capacidade_atual=0, status="aberto"),
+            SlotAgendamento(servico_id=servicos[9].id, data_horario=datetime.now(UTC) + timedelta(days=1, hours=11), capacidade_maxima=8, capacidade_atual=0, status="aberto"),
             SlotAgendamento(servico_id=servicos[9].id, data_horario=datetime.now(UTC) + timedelta(days=2, hours=9), capacidade_maxima=8, capacidade_atual=0, status="aberto"),
-            SlotAgendamento(servico_id=servicos[10].id, data_horario=datetime.now(UTC) + timedelta(days=1, hours=8), capacidade_maxima=15, capacidade_atual=0, status="aberto"),  # Exames Médicos
+            SlotAgendamento(servico_id=servicos[10].id, data_horario=datetime.now(UTC) + timedelta(days=1, hours=8), capacidade_maxima=15, capacidade_atual=0, status="aberto"),
             SlotAgendamento(servico_id=servicos[10].id, data_horario=datetime.now(UTC) + timedelta(days=1, hours=13), capacidade_maxima=15, capacidade_atual=0, status="aberto"),
         ]
         db.session.add_all(slots)
         db.session.commit()
         
-        # Tickets iniciais para algumas filas
+        # Tickets iniciais usando QueueService para consistência
         tickets = [
-            Ticket(queue_id=queues[0].id, user_id="user1", ticket_number=1, qr_code=f"QR-{uuid.uuid4().hex[:8]}", issued_at=datetime.now(UTC) - timedelta(minutes=10), priority=1, is_physical=False, status='pending'),
-            Ticket(queue_id=queues[1].id, user_id="user2", ticket_number=1, qr_code=f"QR-{uuid.uuid4().hex[:8]}", issued_at=datetime.now(UTC) - timedelta(minutes=5), priority=0, is_physical=True, expires_at=datetime.now(UTC) + timedelta(minutes=25), status='pending'),
-            Ticket(queue_id=queues[2].id, user_id="user3", ticket_number=1, qr_code=f"QR-{uuid.uuid4().hex[:8]}", issued_at=datetime.now(UTC) - timedelta(minutes=15), priority=0, is_physical=False, status='pending'),
+            QueueService.add_to_queue("Vacinação Infantil", "user1", priority=1, is_physical=False),
+            QueueService.add_to_queue("Emissão de BI", "user2", priority=0, is_physical=True),
+            QueueService.add_to_queue("Consulta Geral", "user3", priority=0, is_physical=False),
         ]
-        queues[0].active_tickets += 1
-        queues[1].active_tickets += 1
-        queues[2].active_tickets += 1
-        db.session.add_all(tickets)
-        db.session.commit()
         
         # Feedback inicial
         feedback = [
