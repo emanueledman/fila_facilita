@@ -1,5 +1,6 @@
 import logging
-from flask import request, jsonify, current_app
+from flask import app, request, jsonify, current_app
+from sqlalchemy.exc import SQLAlchemyError  # Adicionado para capturar erros de banco
 from ..auth import require_auth, require_gestor
 from ..services.queue_service import QueueService
 from datetime import datetime, time
@@ -57,10 +58,13 @@ def init_queue_routes(app):
     def get_ticket(service):
         """Emite um novo ticket para a fila especificada."""
         try:
+            app.logger.info(f"Tentando emitir ticket para usuário {request.user_id} na fila {service}")
             data = request.get_json() or {}
+            app.logger.info(f"Dados recebidos: {data}")
             priority = data.get('priority', 0)
             is_physical = data.get('is_physical', False)
             
+            app.logger.info(f"Chamando QueueService.add_to_queue com serviço: {service}, usuário: {request.user_id}")
             ticket = QueueService.add_to_queue(service, request.user_id, priority, is_physical)
             wait_time = QueueService.calculate_wait_time(ticket.queue_id, ticket.ticket_number, ticket.priority)
             
@@ -78,14 +82,20 @@ def init_queue_routes(app):
                 }
             }
             
-            logger.info(f"Ticket {ticket.id} emitido para {request.user_id} na fila {service}")
+            app.logger.info(f"Ticket {ticket.id} emitido com sucesso para {request.user_id}")
             return jsonify(response), 201
+        
         except ValueError as e:
-            logger.warning(f"Falha ao emitir ticket para {request.user_id} na fila {service}: {str(e)}")
+            app.logger.warning(f"Falha ao emitir ticket para {request.user_id} na fila {service}: {str(e)}")
             return jsonify({'error': str(e)}), 400
+        
+        except SQLAlchemyError as e:
+            app.logger.error(f"Erro no banco de dados ao emitir ticket: {str(e)}", exc_info=True)
+            return jsonify({'error': 'Erro no banco de dados', 'details': str(e)}), 500
+        
         except Exception as e:
-            logger.error(f"Erro interno ao emitir ticket: {str(e)}")
-            return jsonify({'error': 'Erro interno ao emitir ticket'}), 500
+            app.logger.error(f"Erro interno ao emitir ticket (não relacionado ao banco): {str(e)}", exc_info=True)
+            return jsonify({'error': 'Erro interno no servidor', 'details': str(e)}), 500
 
     @app.route('/api/ticket/<ticket_id>', methods=['GET'])
     @require_auth

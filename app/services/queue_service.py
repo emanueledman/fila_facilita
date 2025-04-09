@@ -4,6 +4,7 @@ import logging
 from flask import current_app
 from flask_socketio import emit
 from sqlalchemy import desc
+from sqlalchemy.exc import SQLAlchemyError  # Adicionado para capturar erros de banco
 from .. import db
 from ..models import Queue, Ticket
 
@@ -124,49 +125,60 @@ class QueueService:
     @staticmethod
     def add_to_queue(service, user_id, priority=0, is_physical=False):
         """Adiciona um usuário a uma fila, gerando ticket e comprovante."""
-        queue = Queue.query.filter_by(service=service).first()
-        if not queue:
-            logger.error(f"Fila não encontrada para serviço: {service}")
-            raise ValueError("Fila não encontrada")
-        if queue.active_tickets >= queue.daily_limit:
-            logger.warning(f"Fila {service} atingiu o limite diário: {queue.daily_limit}")
-            raise ValueError("Fila lotada")
-        if Ticket.query.filter_by(user_id=user_id, queue_id=queue.id, status='pending').first():
-            logger.warning(f"Usuário {user_id} já está na fila {service}")
-            raise ValueError("Usuário já está na fila")
+        try:
+            queue = Queue.query.filter_by(service=service).first()
+            if not queue:
+                logger.error(f"Fila não encontrada para serviço: {service}")
+                raise ValueError("Fila não encontrada")
+            if queue.active_tickets >= queue.daily_limit:
+                logger.warning(f"Fila {service} atingiu o limite diário: {queue.daily_limit}")
+                raise ValueError("Fila lotada")
+            if Ticket.query.filter_by(user_id=user_id, queue_id=queue.id, status='pending').first():
+                logger.warning(f"Usuário {user_id} já está na fila {service}")
+                raise ValueError("Usuário já está na fila")
+            
+            ticket_number = queue.active_tickets + 1
+            qr_code = QueueService.generate_qr_code()
+            expires_at = datetime.utcnow() + timedelta(minutes=QueueService.DEFAULT_EXPIRATION_MINUTES) if is_physical else None
+            
+            ticket = Ticket(
+                queue_id=queue.id,
+                user_id=user_id,
+                ticket_number=ticket_number,
+                qr_code=qr_code,
+                priority=priority,
+                is_physical=is_physical,
+                expires_at=expires_at
+            )
+            ticket.receipt_data = QueueService.generate_receipt(ticket)
+            
+            queue.active_tickets += 1
+            db.session.add(ticket)
+            logger.debug(f"Antes do commit: ticket={ticket.__dict__}, queue.active_tickets={queue.active_tickets}")
+            db.session.commit()
+            
+            wait_time = QueueService.calculate_wait_time(queue.id, ticket_number, priority)
+            message = f"Senha #{ticket_number} emitida. QR: {qr_code}. Espera: {wait_time} min"
+            QueueService.send_notification(user_id, message)
+            
+            emit('queue_update', {
+                'queue_id': queue.id,
+                'active_tickets': queue.active_tickets,
+                'message': f"Nova senha emitida: #{ticket_number}"
+            }, namespace='/', broadcast=True)
+            
+            logger.info(f"Ticket {ticket.id} adicionado à fila {service} para {user_id}")
+            return ticket
         
-        ticket_number = queue.active_tickets + 1
-        qr_code = QueueService.generate_qr_code()
-        expires_at = datetime.utcnow() + timedelta(minutes=QueueService.DEFAULT_EXPIRATION_MINUTES) if is_physical else None
+        except SQLAlchemyError as e:
+            logger.error(f"Erro no banco de dados ao adicionar ticket: {str(e)}", exc_info=True)
+            db.session.rollback()  # Desfaz alterações em caso de erro
+            raise  # Propaga o erro para a rota tratar
         
-        ticket = Ticket(
-            queue_id=queue.id,
-            user_id=user_id,
-            ticket_number=ticket_number,
-            qr_code=qr_code,
-            priority=priority,
-            is_physical=is_physical,
-            expires_at=expires_at
-        )
-        ticket.receipt_data = QueueService.generate_receipt(ticket)
-        
-        queue.active_tickets += 1
-        db.session.add(ticket)
-        db.session.commit()
-        
-        wait_time = QueueService.calculate_wait_time(queue.id, ticket_number, priority)
-        message = f"Senha #{ticket_number} emitida. QR: {qr_code}. Espera: {wait_time} min"
-        QueueService.send_notification(user_id, message)
-        
-        # Emite atualização via WebSocket
-        emit('queue_update', {
-            'queue_id': queue.id,
-            'active_tickets': queue.active_tickets,
-            'message': f"Nova senha emitida: #{ticket_number}"
-        }, namespace='/', broadcast=True)
-        
-        logger.info(f"Ticket {ticket.id} adicionado à fila {service} para {user_id}")
-        return ticket
+        except Exception as e:
+            logger.error(f"Erro interno ao adicionar ticket (não relacionado ao banco): {str(e)}", exc_info=True)
+            db.session.rollback()  # Desfaz alterações em caso de erro
+            raise  # Propaga o erro para a rota tratar
 
     @staticmethod
     def call_next(service):
