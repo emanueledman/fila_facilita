@@ -4,7 +4,7 @@ import requests
 from cachetools import TTLCache
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
-import os # Importe o módulo os
+import os
 
 app = Flask(__name__)
 CORS(app)
@@ -16,16 +16,14 @@ cache = TTLCache(maxsize=1000, ttl=3600)
 limiter = Limiter(
     app=app,
     key_func=get_remote_address,
-    default_limits=["100 per day"] # Limite padrão para todas as rotas
+    default_limits=["100 per day"]
 )
 
 # Use uma variável de ambiente para a URL da API externa
-# No Render, você configurará ANGOLA_API_BASE_URL nas variáveis de ambiente.
-# Para desenvolvimento local, ele usará 'https://angolaapi.onrender.com' como padrão.
 ANGOLA_API_BASE_URL = os.environ.get('ANGOLA_API_BASE_URL', 'https://angolaapi.onrender.com')
 
 @app.route('/validate-bi/<bi_number>')
-@limiter.limit("10 per minute")  # Limite adicional específico para esta rota
+@limiter.limit("10 per minute")
 def validate_bi(bi_number):
     # Verifica no cache primeiro
     if bi_number in cache:
@@ -45,25 +43,29 @@ def validate_bi(bi_number):
             try:
                 error_data = response.json()
                 message = error_data.get('message', 'Erro ao validar BI na API externa.')
-            except ValueError: # Caso a resposta não seja um JSON válido
+            except ValueError:
                 message = f'Erro ao validar BI na API externa. Status: {response.status_code}'
-
-            return jsonify({
-                'sucess': False,
-                'message': message
-            }), response.status_code # Retorna o status code original da API externa
             
-    except requests.exceptions.RequestException as e: # Captura erros de conexão ou requisição
+            return jsonify({
+                'success': False,  # CORRIGIDO: era 'sucess'
+                'message': message
+            }), response.status_code
+            
+    except requests.exceptions.RequestException as e:
         return jsonify({
-            'sucess': False,
+            'success': False,  # CORRIGIDO: era 'sucess'
             'message': f'Erro de conexão ou requisição com a API externa: {str(e)}'
         }), 500
-    except Exception as e: # Captura outros erros inesperados
+        
+    except Exception as e:
         return jsonify({
-            'sucess': False,
+            'success': False,  # CORRIGIDO: era 'sucess'
             'message': f'Erro interno do servidor: {str(e)}'
         }), 500
-        
+
 @app.route('/health')
 def health():
     return jsonify({'status': 'healthy'}), 200
+
+if __name__ == '__main__':
+    app.run(debug=True)
