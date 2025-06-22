@@ -49,17 +49,17 @@ def validate_bi(bi_number):
                 message = f'Erro ao validar BI na API externa. Status: {response.status_code}'
 
             return jsonify({
-                'success': False,
+                'sucess': False,
                 'message': message
             }), response.status_code # Retorna o status code original da API externa
             
     except requests.exceptions.RequestException as e: # Captura erros de conexão ou requisição
         return jsonify({
-            'success': False,
+            'sucess': False,
             'message': f'Erro de conexão ou requisição com a API externa: {str(e)}'
         }), 500
     except Exception as e: # Captura outros erros inesperados
         return jsonify({
-            'success': False,
+            'sucess': False,
             'message': f'Erro interno do servidor: {str(e)}'
         }), 500
