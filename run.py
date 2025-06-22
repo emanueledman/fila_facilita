@@ -20,7 +20,8 @@ limiter = Limiter(
 )
 
 # Use uma variável de ambiente para a URL da API externa
-# Se a variável ANGOLA_API_BASE_URL não estiver definida (ex: local), usa o valor padrão
+# No Render, você configurará ANGOLA_API_BASE_URL nas variáveis de ambiente.
+# Para desenvolvimento local, ele usará 'https://angolaapi.onrender.com' como padrão.
 ANGOLA_API_BASE_URL = os.environ.get('ANGOLA_API_BASE_URL', 'https://angolaapi.onrender.com')
 
 @app.route('/validate-bi/<bi_number>')
@@ -62,9 +63,3 @@ def validate_bi(bi_number):
             'success': False,
             'message': f'Erro interno do servidor: {str(e)}'
         }), 500
-
-if __name__ == '__main__':
-    # Este bloco é apenas para desenvolvimento local.
-    # No Render, o Gunicorn iniciará o aplicativo.
-    port = int(os.environ.get("PORT", 5000)) # Pega a porta do ambiente ou usa 5000
-    app.run(debug=True, host='0.0.0.0', port=port)
