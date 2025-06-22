@@ -35,9 +35,16 @@ def validate_bi(bi_number):
         
         if response.status_code == 200:
             result = response.json()
-            # Armazena no cache
-            cache[bi_number] = result
-            return jsonify(result), 200
+            
+            # NORMALIZA A RESPOSTA: Corrige o erro de digitação da API externa
+            normalized_result = {
+                'success': result.get('sucess', result.get('success', False)),  # Verifica ambas as grafias
+                'message': result.get('message', 'BI validado com sucesso')
+            }
+            
+            # Armazena a resposta normalizada no cache
+            cache[bi_number] = normalized_result
+            return jsonify(normalized_result), 200
         else:
             # Tenta pegar a mensagem de erro da API externa, se disponível
             try:
@@ -47,19 +54,19 @@ def validate_bi(bi_number):
                 message = f'Erro ao validar BI na API externa. Status: {response.status_code}'
             
             return jsonify({
-                'success': False,  # CORRIGIDO: era 'sucess'
+                'success': False,
                 'message': message
             }), response.status_code
             
     except requests.exceptions.RequestException as e:
         return jsonify({
-            'success': False,  # CORRIGIDO: era 'sucess'
+            'success': False,
             'message': f'Erro de conexão ou requisição com a API externa: {str(e)}'
         }), 500
         
     except Exception as e:
         return jsonify({
-            'success': False,  # CORRIGIDO: era 'sucess'
+            'success': False,
             'message': f'Erro interno do servidor: {str(e)}'
         }), 500
 
