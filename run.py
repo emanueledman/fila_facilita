@@ -63,3 +63,7 @@ def validate_bi(bi_number):
             'sucess': False,
             'message': f'Erro interno do servidor: {str(e)}'
         }), 500
+        
+@app.route('/health')
+def health():
+    return jsonify({'status': 'healthy'}), 200
