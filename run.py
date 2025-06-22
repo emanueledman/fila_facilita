@@ -1,65 +1,95 @@
+
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 import requests
 from cachetools import TTLCache
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
-import os # Importe o módulo os
+import os
+import logging
 
 app = Flask(__name__)
 CORS(app)
 
-# Configuração de cache (mantém por 1 hora)
-cache = TTLCache(maxsize=1000, ttl=3600)
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
-# Rate limiting (100 requisições por dia por IP como padrão, ajustável)
+# Configuration for cache (1 hour TTL for successful validations, 5 minutes for failures)
+success_cache = TTLCache(maxsize=1000, ttl=3600)
+failure_cache = TTLCache(maxsize=1000, ttl=300)
+
+# Rate limiting (100 requests per day per IP, 10 per minute for BI validation)
 limiter = Limiter(
     app=app,
     key_func=get_remote_address,
-    default_limits=["100 per day"] # Limite padrão para todas as rotas
+    default_limits=["100 per day"]
 )
 
-# Use uma variável de ambiente para a URL da API externa
-# No Render, você configurará ANGOLA_API_BASE_URL nas variáveis de ambiente.
-# Para desenvolvimento local, ele usará 'https://angolaapi.onrender.com' como padrão.
+# External API URL from environment variable
 ANGOLA_API_BASE_URL = os.environ.get('ANGOLA_API_BASE_URL', 'https://angolaapi.onrender.com')
 
 @app.route('/validate-bi/<bi_number>')
-@limiter.limit("10 per minute")  # Limite adicional específico para esta rota
+@limiter.limit("10 per minute")
 def validate_bi(bi_number):
-    # Verifica no cache primeiro
-    if bi_number in cache:
-        return jsonify(cache[bi_number])
-    
+    # Normalize BI number (remove spaces, convert to uppercase)
+    bi_number = bi_number.strip().upper()
+
+    # Check success cache first
+    if bi_number in success_cache:
+        logger.info(f"Cache hit for BI {bi_number} (success)")
+        return jsonify(success_cache[bi_number]), 200
+
+    # Check failure cache
+    if bi_number in failure_cache:
+        logger.info(f"Cache hit for BI {bi_number} (failure)")
+        return jsonify(failure_cache[bi_number]), 404
+
     try:
-        # O backend Flask faz a requisição para a API externa
-        response = requests.get(f'{ANGOLA_API_BASE_URL}/api/v1/validate/bi/{bi_number}')
+        # Make request to external API
+        response = requests.get(f'{ANGOLA_API_BASE_URL}/api/v1/validate/bi/{bi_number}', timeout=5)
         
         if response.status_code == 200:
             result = response.json()
-            # Armazena no cache
-            cache[bi_number] = result
-            return jsonify(result), 200
+            if result.get('success', False):
+                # Cache successful validation
+                success_cache[bi_number] = result
+                logger.info(f"BI {bi_number} validated successfully")
+                return jsonify(result), 200
+            else:
+                # Cache failed validation
+                failure_cache[bi_number] = {
+                    'success': False,
+                    'message': result.get('message', 'Número de BI inválido ou não encontrado')
+                }
+                logger.warning(f"BI {bi_number} not found: {result.get('message')}")
+                return jsonify(failure_cache[bi_number]), 404
         else:
-            # Tenta pegar a mensagem de erro da API externa, se disponível
-            try:
-                error_data = response.json()
-                message = error_data.get('message', 'Erro ao validar BI na API externa.')
-            except ValueError: # Caso a resposta não seja um JSON válido
-                message = f'Erro ao validar BI na API externa. Status: {response.status_code}'
-
+            # Handle non-200 responses from external API
+            logger.error(f"External API error for BI {bi_number}: Status {response.status_code}")
             return jsonify({
                 'success': False,
-                'message': message
-            }), response.status_code # Retorna o status code original da API externa
-            
-    except requests.exceptions.RequestException as e: # Captura erros de conexão ou requisição
+                'message': f'Erro ao validar BI. Status: {response.status_code}'
+            }), 502
+
+    except requests.exceptions.Timeout:
+        logger.error(f"Timeout error for BI {bi_number}")
         return jsonify({
             'success': False,
-            'message': f'Erro de conexão ou requisição com a API externa: {str(e)}'
-        }), 500
-    except Exception as e: # Captura outros erros inesperados
+            'message': 'Erro: Tempo de resposta da API excedido. Tente novamente.'
+        }), 504
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Request error for BI {bi_number}: {str(e)}")
+        return jsonify({
+            'success': False,
+            'message': f'Erro de conexão com a API externa: {str(e)}'
+        }), 503
+    except Exception as e:
+        logger.error(f"Internal error for BI {bi_number}: {str(e)}")
         return jsonify({
             'success': False,
             'message': f'Erro interno do servidor: {str(e)}'
         }), 500
+
+if __name__ == '__main__':
+    app.run(debug=True)
