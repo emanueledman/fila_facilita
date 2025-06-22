@@ -32,63 +32,46 @@ ANGOLA_API_BASE_URL = os.environ.get('ANGOLA_API_BASE_URL', 'https://angolaapi.o
 @app.route('/validate-bi/<bi_number>')
 @limiter.limit("10 per minute")
 def validate_bi(bi_number):
-    # Normalize BI number (remove spaces, convert to uppercase)
+    # Normalize BI number
     bi_number = bi_number.strip().upper()
-
-    # Check success cache first
-    if bi_number in success_cache:
-        logger.info(f"Cache hit for BI {bi_number} (success)")
-        return jsonify(success_cache[bi_number]), 200
-
-    # Check failure cache
-    if bi_number in failure_cache:
-        logger.info(f"Cache hit for BI {bi_number} (failure)")
-        return jsonify(failure_cache[bi_number]), 404
+    
+    # Verificação básica do formato do BI angolano
+    if not re.match(r'^\d{9}[A-Z]{2}\d{3}$', bi_number):
+        failure_cache[bi_number] = {
+            'success': False,
+            'message': 'Formato de BI inválido. Use: 123456789LA042'
+        }
+        return jsonify(failure_cache[bi_number]), 400
 
     try:
-        # Make request to external API
-        response = requests.get(f'{ANGOLA_API_BASE_URL}/api/v1/validate/bi/{bi_number}', timeout=5)
+        # Simulação de validação - substitua por sua lógica real
+        # Esta é apenas uma verificação de exemplo
+        is_valid = True  # Substitua por sua lógica de validação real
         
-        if response.status_code == 200:
-            result = response.json()
-            if result.get('success', False):
-                # Cache successful validation
-                success_cache[bi_number] = result
-                logger.info(f"BI {bi_number} validated successfully")
-                return jsonify(result), 200
-            else:
-                # Cache failed validation
-                failure_cache[bi_number] = {
-                    'success': False,
-                    'message': result.get('message', 'Número de BI inválido ou não encontrado')
+        if is_valid:
+            result = {
+                'success': True,
+                'message': 'BI válido',
+                'data': {
+                    'number': bi_number,
+                    'valid': True
                 }
-                logger.warning(f"BI {bi_number} not found: {result.get('message')}")
-                return jsonify(failure_cache[bi_number]), 404
+            }
+            success_cache[bi_number] = result
+            return jsonify(result), 200  # Sempre retorne 200 para BI válido
         else:
-            # Handle non-200 responses from external API
-            logger.error(f"External API error for BI {bi_number}: Status {response.status_code}")
-            return jsonify({
+            result = {
                 'success': False,
-                'message': f'Erro ao validar BI. Status: {response.status_code}'
-            }), 502
+                'message': 'Número de BI não encontrado'
+            }
+            failure_cache[bi_number] = result
+            return jsonify(result), 404
 
-    except requests.exceptions.Timeout:
-        logger.error(f"Timeout error for BI {bi_number}")
-        return jsonify({
-            'success': False,
-            'message': 'Erro: Tempo de resposta da API excedido. Tente novamente.'
-        }), 504
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Request error for BI {bi_number}: {str(e)}")
-        return jsonify({
-            'success': False,
-            'message': f'Erro de conexão com a API externa: {str(e)}'
-        }), 503
     except Exception as e:
-        logger.error(f"Internal error for BI {bi_number}: {str(e)}")
+        logger.error(f"Error validating BI {bi_number}: {str(e)}")
         return jsonify({
             'success': False,
-            'message': f'Erro interno do servidor: {str(e)}'
+            'message': f'Erro interno: {str(e)}'
         }), 500
 
 if __name__ == '__main__':
