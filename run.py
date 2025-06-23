@@ -14,6 +14,15 @@ import tempfile
 import shutil
 from datetime import datetime
 
+from flask_cors import CORS
+import os
+import logging
+import base64
+import subprocess
+import tempfile
+import shutil
+from datetime import datetime
+
 app = Flask(__name__)
 CORS(app)
 
@@ -135,7 +144,6 @@ def validate_bi(bi_number):
         }), 500
 
 @app.route('/generate-pdf', methods=['POST'])
-@limiter.limit("5 per minute")
 def generate_pdf():
     logger.info("Recebendo solicitação para gerar PDF")
     try:
@@ -153,7 +161,7 @@ def generate_pdf():
         for chart_id, data_url in charts.items():
             base64_data = data_url.replace('data:image/png;base64,', '')
             with open(os.path.join(images_dir, f'{chart_id}.png'), 'wb') as f:
-                f.write(base64.decode(base64_data))
+                f.write(base64.b64decode(base64_data))
 
         # Carregar template LaTeX
         latex_template = r"""
@@ -201,7 +209,7 @@ def generate_pdf():
         \end{titlepage}
         \section*{Resumo Executivo}
         \addcontentsline{toc}{section}{Resumo Executivo}
-        Este relatório apresenta uma visão geral dos problemas reportados na plataforma FixABairro até \reportDate. Inclui métricas-chave, análise por categoria, urgência, tendência temporal, uma lista de problemas recentes e validação de identidade.
+        Este relatório apresenta uma visão geral dos problemas reportados na plataforma FixABairro até \reportDate. Inclui métricas-chave, análise por categoria, urgência, tendência temporal e uma lista de problemas recentes.
         \section{Métricas Gerais}
         \begin{tabularx}{\textwidth}{l|X}
             \toprule
@@ -211,16 +219,6 @@ def generate_pdf():
             Problemas Abertos & \openProblems \\
             Em Andamento & \inProgressProblems \\
             Problemas Resolvidos & \resolvedProblems \\
-            \bottomrule
-        \end{tabularx}
-        \section{Validação de Identidade}
-        \begin{tabularx}{\textwidth}{l|X}
-            \toprule
-            \textbf{Campo} & \textbf{Valor} \\
-            \midrule
-            Número do BI & \biNumber \\
-            Status & \biStatus \\
-            Mensagem & \biMessage \\
             \bottomrule
         \end{tabularx}
         \section{Análise Gráfica}
@@ -252,26 +250,20 @@ def generate_pdf():
         \end{tabularx}
         \section*{Conclusão}
         \addcontentsline{toc}{section}{Conclusão}
-        Este relatório consolida as informações do dashboard FixABairro, fornecendo insights valiosos para a gestão de problemas e validação de identidade. Para mais detalhes, acesse a plataforma em \url{https://fixabairro.netlify.app}.
+        Este relatório consolida as informações do dashboard FixABairro, fornecendo insights valiosos para a gestão de problemas. Para mais detalhes, acesse a plataforma em \url{https://fixabairro.netlify.app}.
         \end{document}
         """
 
         # Substituir placeholders
         metrics = report_data.get('metrics', {})
-        bi_validation = report_data.get('biValidation', {})
         table_rows = report_data.get('table', [])
-        latex_content = (
-            latex_template
-            .replace(r'\reportDate', report_data.get('date', datetime.now().strftime('%d de %B de %Y')))
-            .replace(r'\totalProblems', metrics.get('totalProblems', '0'))
-            .replace(r'\openProblems', metrics.get('openProblems', '0'))
-            .replace(r'\inProgressProblems', metrics.get('inProgressProblems', '0'))
-            .replace(r'\resolvedProblems', metrics.get('resolvedProblems', '0'))
-            .replace(r'\biNumber', bi_validation.get('biNumber', 'N/A'))
-            .replace(r'\biStatus', 'Válido' if bi_validation.get('success', False) else 'Inválido')
-            .replace(r'\biMessage', bi_validation.get('message', 'Nenhuma validação realizada'))
+        latex_content = latex_template \
+            .replace(r'\reportDate', report_data.get('date', datetime.now().strftime('%d de %B de %Y'))) \
+            .replace(r'\totalProblems', metrics.get('totalProblems', '0')) \
+            .replace(r'\openProblems', metrics.get('openProblems', '0')) \
+            .replace(r'\inProgressProblems', metrics.get('inProgressProblems', '0')) \
+            .replace(r'\resolvedProblems', metrics.get('resolvedProblems', '0')) \
             .replace(r'\tableRows', '\n'.join([' & '.join(row) + r' \\ \hline' for row in table_rows]))
-        )
 
         # Salvar template LaTeX
         latex_file = os.path.join(temp_dir, 'output.tex')
@@ -299,7 +291,7 @@ def generate_pdf():
             'success': False,
             'error-message': f'Erro ao gerar PDF: {str(e)}'
         }), 500
-
+        
 @app.route('/health')
 def health():
     return jsonify({'status': 'healthy'}), 200
